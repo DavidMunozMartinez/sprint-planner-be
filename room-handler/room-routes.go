@@ -1,14 +1,27 @@
-package api
+package roomhandler
 
 import (
 	"encoding/json"
 	"net/http"
-	utils "sprint-planner/utils"
+	api "sprint-planner/api"
+	"sprint-planner/utils"
 	wshandler "sprint-planner/ws-handler"
 	"time"
 )
 
 var EMPTY_SUCCESS = []byte("{ \"success\": \"true\" }")
+
+func Init() {
+	api.SetRoute("/room-join", http.MethodPost, JoinRoom)
+	api.SetRoute("/room-create", http.MethodPost, CreateRoom)
+	api.SetRoute("/room-get", http.MethodGet, GetRoomData)
+	api.SetRoute("/room-leave", http.MethodPost, LeaveRoom)
+	api.SetRoute("/room-close", http.MethodPost, CloseRoom)
+
+	api.SetRoute("/update-vote", http.MethodPost, UpdateVote)
+	api.SetRoute("/reveal-votes", http.MethodPost, RevealVotes)
+	api.SetRoute("/reset-votes", http.MethodPost, ResetVotes)
+}
 
 type CreateRoomBody struct {
 	Id   string
@@ -29,7 +42,7 @@ func CreateRoom(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var roomId = utils.RandStringBytes(10)
-	makeRoom(roomId, data.Id, data.Name)
+	MakeRoom(roomId, data.Id, data.Name)
 	response.RoomId = roomId
 	dispatch(w, response)
 }
@@ -40,10 +53,10 @@ type JoinRoomBody struct {
 	Name   string `json:"name"`
 }
 type JoinRoomResponse struct {
-	Room wshandler.Room `json:"room"`
+	Room Room `json:"room"`
 }
 type JoinRoomWSData struct {
-	Voter wshandler.Voter `json:"voter"`
+	Voter Voter `json:"voter"`
 }
 
 func JoinRoom(w http.ResponseWriter, r *http.Request) {
@@ -58,11 +71,11 @@ func JoinRoom(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var roomId = data.RoomId
-	var room = wshandler.GetRoomById(roomId)
+	var room = GetRoomById(roomId)
 	if room.Id != "" {
-		var voter = makeVoter(data.Id, data.Name)
+		var voter = MakeVoter(data.Id, data.Name)
 
-		wshandler.BroadcastToRoom(room, wshandler.WSMessage{
+		wshandler.BroadcastToRoom(room.Id, wshandler.WSMessage{
 			Timestamp: int(time.Now().UTC().UnixMilli()),
 			Type:      "voterJoined",
 			Message: JoinRoomWSData{
@@ -87,7 +100,7 @@ type GetRoomDataBody struct {
 	RoomId string `json:"roomId"`
 }
 type GetRoomDataResponse struct {
-	Room wshandler.Room `json:"room"`
+	Room Room `json:"room"`
 }
 
 func GetRoomData(w http.ResponseWriter, r *http.Request) {
@@ -100,7 +113,7 @@ func GetRoomData(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error()))
 	}
 
-	response.Room = wshandler.GetRoomById(data.RoomId)
+	response.Room = GetRoomById(data.RoomId)
 	if response.Room.Id != "" {
 		dispatch(w, response)
 	} else {
@@ -130,11 +143,11 @@ func UpdateVote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var changed = wshandler.SetVote(body.RoomId, body.VoterId, body.Value)
+	var changed = SetVote(body.RoomId, body.VoterId, body.Value)
 	if changed {
-		var room = wshandler.GetRoomById(body.RoomId)
+		var room = GetRoomById(body.RoomId)
 		var voter = room.Voters[body.VoterId]
-		wshandler.BroadcastToRoom(room, wshandler.WSMessage{
+		wshandler.BroadcastToRoom(room.Id, wshandler.WSMessage{
 			Timestamp: int(time.Now().UTC().UnixMilli()),
 			Type:      "voterUpdated",
 			Message: UpdateVoteWSEvent{
@@ -166,15 +179,15 @@ func RevealVotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var room = wshandler.GetRoomById(body.RoomId)
+	var room = GetRoomById(body.RoomId)
 	room.Revealed = true
-	wshandler.SetRoom(room)
+	SetRoom(room)
 	var event RevealVotesWSEvent
 	event.Votes = make(map[string]float32)
 	for _, v := range room.Voters {
 		event.Votes[v.Id] = v.Vote
 	}
-	wshandler.BroadcastToRoom(room, wshandler.WSMessage{
+	wshandler.BroadcastToRoom(room.Id, wshandler.WSMessage{
 		Timestamp: int(time.Now().UTC().UnixMilli()),
 		Type:      "votesRevealed",
 		Message:   event,
@@ -196,18 +209,71 @@ func ResetVotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var room = wshandler.GetRoomById(body.RoomId)
+	var room = GetRoomById(body.RoomId)
 	room.Revealed = false
-	wshandler.SetRoom(room)
+	SetRoom(room)
 
 	for _, v := range room.Voters {
-		wshandler.SetVote(room.Id, v.Id, v.Vote)
+		SetVote(room.Id, v.Id, v.Vote)
 	}
-	wshandler.BroadcastToRoom(room, wshandler.WSMessage{
+	wshandler.BroadcastToRoom(room.Id, wshandler.WSMessage{
 		Timestamp: int(time.Now().UTC().UnixMilli()),
 		Type:      "votesReset",
-		// Message,
 	})
+	w.WriteHeader(200)
+	w.Write(EMPTY_SUCCESS)
+}
+
+type LeaveRoomBody = struct {
+	RoomId  string `json:"roomId"`
+	VoterId string `json:"voterId"`
+}
+type LeaveRoomWSEvent = struct {
+	VoterId string `json:"voterId"`
+}
+
+func LeaveRoom(w http.ResponseWriter, r *http.Request) {
+	var body LeaveRoomBody
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+	DeleteVoter(body.RoomId, body.VoterId)
+	var event = LeaveRoomWSEvent{
+		VoterId: body.VoterId,
+	}
+	wshandler.BroadcastToRoom(body.RoomId, wshandler.WSMessage{
+		Timestamp: int(time.Now().UTC().UnixMilli()),
+		Type:      "voterLeave",
+		Message:   event,
+	})
+
+	w.WriteHeader(200)
+	w.Write(EMPTY_SUCCESS)
+}
+
+type CloseRoomBody = struct {
+	RoomId string `json:"roomId"`
+}
+
+func CloseRoom(w http.ResponseWriter, r *http.Request) {
+	var body CloseRoomBody
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+	DeleteRoom(body.RoomId)
+	wshandler.BroadcastToRoom(body.RoomId, wshandler.WSMessage{
+		Timestamp: int(time.Now().UTC().UnixMilli()),
+		Type:      "roomClosed",
+	})
+
 	w.WriteHeader(200)
 	w.Write(EMPTY_SUCCESS)
 }
