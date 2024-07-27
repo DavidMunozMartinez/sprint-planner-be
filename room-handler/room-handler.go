@@ -25,6 +25,22 @@ func SetVote(roomId string, voterId string, vote float32) bool {
 	return hasVotedChanged
 }
 
+func SetTimer(roomId string, timer RoomTimer) {
+	var room = rooms[roomId]
+	room.Timer = timer
+	rooms[roomId] = room
+}
+
+func TickRoomTimer(roomId string) RoomTimer {
+	var room = rooms[roomId]
+	room.Timer.Current = room.Timer.Current - 1
+	if room.Timer.Current == 0 {
+		room.Timer.Running = false
+	}
+	rooms[roomId] = room
+	return room.Timer
+}
+
 func MakeRoom(roomId string, hostId string, hostName string) Voter {
 	var host = MakeVoter(hostId, hostName)
 	host.IsHost = true

@@ -17,6 +17,7 @@ func Init() {
 	api.SetRoute("/room-get", http.MethodGet, GetRoomData)
 	api.SetRoute("/room-leave", http.MethodPost, LeaveRoom)
 	api.SetRoute("/room-close", http.MethodPost, CloseRoom)
+	api.SetRoute("/room-timer", http.MethodPost, StartTimer)
 
 	api.SetRoute("/update-vote", http.MethodPost, UpdateVote)
 	api.SetRoute("/reveal-votes", http.MethodPost, RevealVotes)
@@ -181,6 +182,18 @@ func RevealVotes(w http.ResponseWriter, r *http.Request) {
 
 	var room = GetRoomById(body.RoomId)
 	room.Revealed = true
+	if room.Timer.Running {
+		room.Timer.Current = -1
+		room.Timer.Running = false
+		room.Timer.Time = -1
+		var event TimerWSEvent
+		event.Timer = room.Timer
+		wshandler.BroadcastToRoom(body.RoomId, wshandler.WSMessage{
+			Timestamp: int(time.Now().UTC().UnixMilli()),
+			Type:      "timerUpdate",
+			Message:   event,
+		})
+	}
 	SetRoom(room)
 	var event RevealVotesWSEvent
 	event.Votes = make(map[string]float32)
@@ -211,6 +224,18 @@ func ResetVotes(w http.ResponseWriter, r *http.Request) {
 
 	var room = GetRoomById(body.RoomId)
 	room.Revealed = false
+	if room.Timer.Running {
+		room.Timer.Current = -1
+		room.Timer.Running = false
+		room.Timer.Time = -1
+		var event TimerWSEvent
+		event.Timer = room.Timer
+		wshandler.BroadcastToRoom(body.RoomId, wshandler.WSMessage{
+			Timestamp: int(time.Now().UTC().UnixMilli()),
+			Type:      "timerUpdate",
+			Message:   event,
+		})
+	}
 	SetRoom(room)
 
 	for _, v := range room.Voters {
@@ -288,4 +313,63 @@ func dispatch(w http.ResponseWriter, response any) {
 		w.WriteHeader(200)
 		w.Write(json_data)
 	}
+}
+
+type StartTimerBody = struct {
+	RoomId string    `json:"roomId"`
+	Timer  RoomTimer `json:"timer"`
+}
+
+type TimerWSEvent struct {
+	Timer RoomTimer `json:"timer"`
+}
+
+func StartTimer(w http.ResponseWriter, r *http.Request) {
+	var body StartTimerBody
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+	var roomTimer = body.Timer
+	roomTimer.Running = true
+
+	SetTimer(body.RoomId, roomTimer)
+
+	// Start the async timer
+	stopChan := make(chan bool)
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		stopTimer := time.NewTimer(time.Second * time.Duration(roomTimer.Time))
+		defer stopTimer.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				timer := TickRoomTimer(body.RoomId)
+				if timer.Current < 0 {
+					stopChan <- true
+				}
+				var event TimerWSEvent
+				event.Timer = timer
+				wshandler.BroadcastToRoom(body.RoomId, wshandler.WSMessage{
+					Timestamp: int(time.Now().UTC().UnixMilli()),
+					Type:      "timerUpdate",
+					Message:   event,
+				})
+
+			case <-stopTimer.C:
+				stopChan <- true
+				return
+			}
+		}
+	}()
+
+	// Wait for the stop signal
+	<-stopChan
+
+	w.WriteHeader(200)
+	w.Write(EMPTY_SUCCESS)
 }
