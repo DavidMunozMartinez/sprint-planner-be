@@ -22,6 +22,8 @@ func Init() {
 	api.SetRoute("/update-vote", http.MethodPost, UpdateVote)
 	api.SetRoute("/reveal-votes", http.MethodPost, RevealVotes)
 	api.SetRoute("/reset-votes", http.MethodPost, ResetVotes)
+
+	StartInactiveRoomChecker()
 }
 
 type CreateRoomBody struct {
@@ -87,6 +89,7 @@ func JoinRoom(w http.ResponseWriter, r *http.Request) {
 		})
 
 		room.Voters[data.Id] = voter
+		room.LastActivity = time.Now() // Update last activity
 		response.Room = room
 
 		dispatch(w, response)
@@ -147,6 +150,8 @@ func UpdateVote(w http.ResponseWriter, r *http.Request) {
 	var changed = SetVote(body.RoomId, body.VoterId, body.Value)
 	if changed {
 		var room = GetRoomById(body.RoomId)
+		room.LastActivity = time.Now() // Update last activity
+		SetRoom(room)
 		var voter = room.Voters[body.VoterId]
 		wshandler.BroadcastToRoom(room.Id, wshandler.WSMessage{
 			Timestamp: int(time.Now().UTC().UnixMilli()),
@@ -181,6 +186,7 @@ func RevealVotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var room = GetRoomById(body.RoomId)
+	room.LastActivity = time.Now() // Update last activity
 	room.Revealed = true
 	if room.Timer.Running {
 		room.Timer.Current = -1
@@ -223,6 +229,7 @@ func ResetVotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var room = GetRoomById(body.RoomId)
+	room.LastActivity = time.Now() // Update last activity
 	room.Revealed = false
 	if room.Timer.Running {
 		room.Timer.Current = -1
@@ -337,6 +344,9 @@ func StartTimer(w http.ResponseWriter, r *http.Request) {
 	roomTimer.Running = true
 
 	SetTimer(body.RoomId, roomTimer)
+	var room = GetRoomById(body.RoomId)
+	room.LastActivity = time.Now() // Update last activity
+	SetRoom(room)
 	wshandler.BroadcastToRoom(body.RoomId, wshandler.WSMessage{
 		Timestamp: int(time.Now().UTC().UnixMilli()),
 		Type:      "timerUpdate",

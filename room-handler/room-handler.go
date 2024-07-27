@@ -1,5 +1,10 @@
 package roomhandler
 
+import (
+	wshandler "sprint-planner/ws-handler"
+	"time"
+)
+
 var rooms = make(map[string]Room)
 
 func GetRoomById(roomId string) Room {
@@ -50,6 +55,7 @@ func MakeRoom(roomId string, hostId string, hostName string) Voter {
 		Voters: map[string]Voter{
 			hostId: host,
 		},
+		LastActivity: time.Now(),
 	}
 	SetRoom(room)
 	return host
@@ -70,4 +76,32 @@ func DeleteVoter(roomId string, voterId string) {
 
 func DeleteRoom(roomId string) {
 	delete(rooms, roomId)
+}
+
+func StartInactiveRoomChecker() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				now := time.Now()
+				for roomId, room := range rooms {
+					if now.Sub(room.LastActivity) > 1*time.Minute {
+						// Room has been inactive for more than 10 minutes
+						CloseRoomById(roomId)
+					}
+				}
+			}
+		}
+	}()
+}
+
+func CloseRoomById(roomId string) {
+	DeleteRoom(roomId)
+	wshandler.BroadcastToRoom(roomId, wshandler.WSMessage{
+		Timestamp: int(time.Now().UTC().UnixMilli()),
+		Type:      "roomClosed",
+	})
 }

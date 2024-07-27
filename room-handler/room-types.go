@@ -1,5 +1,7 @@
 package roomhandler
 
+import "time"
+
 type RoomTimer struct {
 	Running bool `json:"running"`
 	Time    int  `json:"time"`
@@ -7,11 +9,12 @@ type RoomTimer struct {
 }
 
 type Room struct {
-	Id       string           `json:"id"`
-	Host     string           `json:"host"`
-	Voters   map[string]Voter `json:"voters"`
-	Revealed bool             `json:"revealed"`
-	Timer    RoomTimer        `json:"timer"`
+	Id           string           `json:"id"`
+	Host         string           `json:"host"`
+	Voters       map[string]Voter `json:"voters"`
+	Revealed     bool             `json:"revealed"`
+	Timer        RoomTimer        `json:"timer"`
+	LastActivity time.Time        `json:"-"`
 }
 
 type Voter struct {
