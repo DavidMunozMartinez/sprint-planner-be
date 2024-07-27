@@ -164,7 +164,7 @@ func UpdateVote(w http.ResponseWriter, r *http.Request) {
 	w.Write(EMPTY_SUCCESS)
 }
 
-type RevealVotesBoy struct {
+type RevealVotesBody struct {
 	RoomId string `json:"roomId"`
 }
 type RevealVotesWSEvent struct {
@@ -172,7 +172,7 @@ type RevealVotesWSEvent struct {
 }
 
 func RevealVotes(w http.ResponseWriter, r *http.Request) {
-	var body RevealVotesBoy
+	var body RevealVotesBody
 	err := json.NewDecoder(r.Body).Decode(&body)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -337,6 +337,13 @@ func StartTimer(w http.ResponseWriter, r *http.Request) {
 	roomTimer.Running = true
 
 	SetTimer(body.RoomId, roomTimer)
+	wshandler.BroadcastToRoom(body.RoomId, wshandler.WSMessage{
+		Timestamp: int(time.Now().UTC().UnixMilli()),
+		Type:      "timerUpdate",
+		Message: TimerWSEvent{
+			Timer: roomTimer,
+		},
+	})
 
 	// Start the async timer
 	stopChan := make(chan bool)
@@ -349,6 +356,7 @@ func StartTimer(w http.ResponseWriter, r *http.Request) {
 			select {
 			case <-ticker.C:
 				timer := TickRoomTimer(body.RoomId)
+				// Other actions could set the timer to -1 to force stop it
 				if timer.Current < 0 {
 					stopChan <- true
 				}
