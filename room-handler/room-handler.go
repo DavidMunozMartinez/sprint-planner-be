@@ -88,7 +88,7 @@ func StartInactiveRoomChecker() {
 			case <-ticker.C:
 				now := time.Now()
 				for roomId, room := range rooms {
-					if now.Sub(room.LastActivity) > 1*time.Minute {
+					if now.Sub(room.LastActivity) > 10*time.Minute {
 						// Room has been inactive for more than 10 minutes
 						CloseRoomById(roomId)
 					}
